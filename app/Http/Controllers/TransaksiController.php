@@ -8,7 +8,7 @@ use App\Models\Pelanggan;
 use App\Models\Transaksi;
 use App\Services\TransaksiService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class TransaksiController extends Controller
 {
@@ -23,10 +23,24 @@ class TransaksiController extends Controller
     }
 
     /**
+     * Escape karakter wildcard LIKE agar tidak dimanipulasi input pengguna
+     */
+    private function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    /**
      * Daftar Transaksi
      */
     public function index(Request $request)
     {
+        $request->validate([
+            'tanggal' => 'nullable|date',
+            'status' => 'nullable|string|max:50',
+            'search' => 'nullable|string|max:100',
+        ]);
+
         $query = Transaksi::with(['kasir', 'pelanggan', 'detail.buku']);
 
         // Filter tanggal
@@ -39,9 +53,10 @@ class TransaksiController extends Controller
             $query->where('status', $request->status);
         }
 
-        // Search kode transaksi
+        // Search kode transaksi (dengan escape wildcard)
         if ($request->filled('search')) {
-            $query->where('kode_transaksi', 'like', "%{$request->search}%");
+            $escapedSearch = $this->escapeLike(trim((string) $request->search));
+            $query->where('kode_transaksi', 'like', "%{$escapedSearch}%");
         }
 
         // Jika user TIDAK punya permission lihat-semua (kasir), hanya lihat transaksi sendiri
@@ -74,10 +89,15 @@ class TransaksiController extends Controller
             return redirect()
                 ->route('transaksi.nota', $transaksi)
                 ->with('success', 'Transaksi berhasil diproses!');
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('Gagal memproses transaksi baru', [
+                'user_id' => auth()->id(),
+                'error' => $e->getMessage(),
+            ]);
+
             return back()
                 ->withInput()
-                ->with('error', $e->getMessage());
+                ->with('error', 'Transaksi tidak dapat diproses. Periksa kembali data input atau stok buku.');
         }
     }
 
@@ -118,6 +138,13 @@ class TransaksiController extends Controller
      */
     public function batal(Request $request, Transaksi $transaksi)
     {
+        // Cek kepemilikan transaksi jika user tidak memiliki izin lihat-semua
+        if (!auth()->user()->can('transaksi.lihat-semua')) {
+            if ($transaksi->user_id !== auth()->id()) {
+                abort(403, 'Anda tidak memiliki akses untuk membatalkan transaksi ini.');
+            }
+        }
+
         $request->validate([
             'alasan_batal' => 'required|string|max:1000',
         ]);
@@ -131,8 +158,14 @@ class TransaksiController extends Controller
             $this->transaksiService->batalkanTransaksi($transaksi, $request->alasan_batal);
 
             return back()->with('success', 'Transaksi berhasil dibatalkan.');
-        } catch (\Exception $e) {
-            return back()->with('error', $e->getMessage());
+        } catch (\Throwable $e) {
+            Log::error('Gagal membatalkan transaksi', [
+                'transaksi_id' => $transaksi->id,
+                'user_id' => auth()->id(),
+                'error' => $e->getMessage(),
+            ]);
+
+            return back()->with('error', 'Gagal membatalkan transaksi. Silakan coba lagi.');
         }
     }
 
@@ -141,19 +174,25 @@ class TransaksiController extends Controller
      */
     public function cariBuku(Request $request)
     {
-        $search = $request->get('q', '');
+        $request->validate([
+            'q' => 'nullable|string|max:100',
+        ]);
+
+        $search = $this->escapeLike(trim((string) $request->get('q', '')));
 
         $bukus = Buku::where('is_aktif', true)
             ->where('stok', '>', 0)
-            ->where(function($q) use ($search) {
-                $q->where('judul', 'like', "%{$search}%")
-                  ->orWhere('kode_buku', 'like', "%{$search}%")
-                  ->orWhere('pengarang', 'like', "%{$search}%");
+            ->when($search !== '', function ($query) use ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('judul', 'like', "%{$search}%")
+                        ->orWhere('kode_buku', 'like', "%{$search}%")
+                        ->orWhere('pengarang', 'like', "%{$search}%");
+                });
             })
             ->with('kategori')
             ->limit(10)
             ->get()
-            ->map(function($buku) {
+            ->map(function ($buku) {
                 return [
                     'id' => $buku->id,
                     'kode_buku' => $buku->kode_buku,

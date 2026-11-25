@@ -1,1 +1,13 @@
 *.sqlite*
+/vendor
+/node_modules
+/public/build
+/public/hot
+.env
+.env.*
+!.env.example
+zap-report-*.html
+zap.yaml
+sonar-project.properties
+.env.staging
+docker/
