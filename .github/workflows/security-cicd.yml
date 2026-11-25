@@ -1,0 +1,37 @@
+name: SiBuku Security CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  dependency-and-code-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4 and Composer
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          tools: composer
+          coverage: none
+
+      - name: Ensure no .env files are tracked
+        run: |
+          if git ls-files | grep -E '(^|/)\.env(\.|$)'; then
+            echo "Sensitive .env file detected in repository!"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run Composer Security Audit
+        run: composer audit
+
+      - name: Run Laravel PHPUnit / Pest Tests
+        run: php artisan test
