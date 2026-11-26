@@ -20,9 +20,9 @@ jobs:
           tools: composer
           coverage: none
 
-      - name: Ensure no .env files are tracked
+      - name: Ensure no sensitive .env files are tracked
         run: |
-          if git ls-files | grep -E '(^|/)\.env(\.|$)'; then
+          if git ls-files | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.example$'; then
             echo "ERROR: Sensitive .env file detected in repository!"
             exit 1
           fi
